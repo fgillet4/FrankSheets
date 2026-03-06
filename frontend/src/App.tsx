@@ -30,14 +30,154 @@ function App() {
   const [zoom, setZoom] = useState(100);
   const [showSolverDialog, setShowSolverDialog] = useState(false);
   const [solverType, setSolverType] = useState<'ode' | 'pde' | 'coupled' | null>(null);
+  const [isEditingCell, setIsEditingCell] = useState(false);
+  const [isFormulaMode, setIsFormulaMode] = useState(false);
+  const [selectionStart, setSelectionStart] = useState<{ row: number; col: number } | null>(null);
+  const [selectionEnd, setSelectionEnd] = useState<{ row: number; col: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [clipboard, setClipboard] = useState<{ formula: string; displayValue: string }[][] | null>(null);
 
   const handleCellClick = (row: number, col: number) => {
-    setSelectedCell({ row, col });
-    setFormulaInput(cells[row][col].formula);
+    if (isFormulaMode) {
+      const cellRef = `${getColumnLabel(col)}${row + 1}`;
+      setFormulaInput(prev => prev + cellRef);
+    } else {
+      setSelectedCell({ row, col });
+      setFormulaInput(cells[row][col].formula);
+      setIsEditingCell(false);
+      setSelectionStart(null);
+      setSelectionEnd(null);
+    }
   };
 
+  const handleMouseDown = (row: number, col: number, e: React.MouseEvent) => {
+    if (isFormulaMode) {
+      const cellRef = `${getColumnLabel(col)}${row + 1}`;
+      setFormulaInput(prev => prev + cellRef);
+      return;
+    }
+    
+    if (!isEditingCell) {
+      setIsDragging(true);
+      setSelectionStart({ row, col });
+      setSelectionEnd({ row, col });
+      setSelectedCell({ row, col });
+      setFormulaInput(cells[row][col].formula);
+      e.preventDefault();
+    }
+  };
+
+  const handleMouseEnter = (row: number, col: number) => {
+    if (isDragging && !isFormulaMode && !isEditingCell) {
+      setSelectionEnd({ row, col });
+    }
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  const isInSelection = (row: number, col: number): boolean => {
+    if (!selectionStart || !selectionEnd) return false;
+    
+    const minRow = Math.min(selectionStart.row, selectionEnd.row);
+    const maxRow = Math.max(selectionStart.row, selectionEnd.row);
+    const minCol = Math.min(selectionStart.col, selectionEnd.col);
+    const maxCol = Math.max(selectionStart.col, selectionEnd.col);
+    
+    return row >= minRow && row <= maxRow && col >= minCol && col <= maxCol;
+  };
+
+  const handleColumnClick = (colIndex: number) => {
+    if (!isEditingCell && !isFormulaMode) {
+      setSelectionStart({ row: 0, col: colIndex });
+      setSelectionEnd({ row: GRID_HEIGHT - 1, col: colIndex });
+      setSelectedCell({ row: 0, col: colIndex });
+      setFormulaInput('');
+    }
+  };
+
+  const handleRowClick = (rowIndex: number) => {
+    if (!isEditingCell && !isFormulaMode) {
+      setSelectionStart({ row: rowIndex, col: 0 });
+      setSelectionEnd({ row: rowIndex, col: GRID_WIDTH - 1 });
+      setSelectedCell({ row: rowIndex, col: 0 });
+      setFormulaInput('');
+    }
+  };
+
+  const handleCopy = useCallback(() => {
+    if (selectionStart && selectionEnd) {
+      const minRow = Math.min(selectionStart.row, selectionEnd.row);
+      const maxRow = Math.max(selectionStart.row, selectionEnd.row);
+      const minCol = Math.min(selectionStart.col, selectionEnd.col);
+      const maxCol = Math.max(selectionStart.col, selectionEnd.col);
+      
+      const copiedCells: { formula: string; displayValue: string }[][] = [];
+      for (let r = minRow; r <= maxRow; r++) {
+        const row = [];
+        for (let c = minCol; c <= maxCol; c++) {
+          row.push({ ...cells[r][c] });
+        }
+        copiedCells.push(row);
+      }
+      setClipboard(copiedCells);
+    } else {
+      setClipboard([[{ ...cells[selectedCell.row][selectedCell.col] }]]);
+    }
+  }, [cells, selectedCell, selectionStart, selectionEnd]);
+
+  const handlePaste = useCallback(() => {
+    if (!clipboard) return;
+    
+    const currentCells = cells.map(row => [...row]);
+    const startRow = selectedCell.row;
+    const startCol = selectedCell.col;
+    
+    clipboard.forEach((row, rOffset) => {
+      row.forEach((cell, cOffset) => {
+        const targetRow = startRow + rOffset;
+        const targetCol = startCol + cOffset;
+        
+        if (targetRow < GRID_HEIGHT && targetCol < GRID_WIDTH) {
+          currentCells[targetRow][targetCol] = { ...cell };
+        }
+      });
+    });
+    
+    setCells(currentCells);
+    
+    const endRow = Math.min(startRow + clipboard.length - 1, GRID_HEIGHT - 1);
+    const endCol = Math.min(startCol + clipboard[0].length - 1, GRID_WIDTH - 1);
+    setSelectionStart({ row: startRow, col: startCol });
+    setSelectionEnd({ row: endRow, col: endCol });
+  }, [clipboard, selectedCell, cells]);
+
+  const handleCut = useCallback(() => {
+    handleCopy();
+    
+    const currentCells = cells.map(row => [...row]);
+    if (selectionStart && selectionEnd) {
+      const minRow = Math.min(selectionStart.row, selectionEnd.row);
+      const maxRow = Math.max(selectionStart.row, selectionEnd.row);
+      const minCol = Math.min(selectionStart.col, selectionEnd.col);
+      const maxCol = Math.max(selectionStart.col, selectionEnd.col);
+      
+      for (let r = minRow; r <= maxRow; r++) {
+        for (let c = minCol; c <= maxCol; c++) {
+          currentCells[r][c] = { formula: '', displayValue: '' };
+        }
+      }
+    } else {
+      currentCells[selectedCell.row][selectedCell.col] = { formula: '', displayValue: '' };
+    }
+    setCells(currentCells);
+  }, [cells, selectedCell, selectionStart, selectionEnd, handleCopy]);
+
   const handleFormulaChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormulaInput(e.target.value);
+    const value = e.target.value;
+    setFormulaInput(value);
+    setIsFormulaMode(value.startsWith('='));
   };
 
   const handleFormulaSubmit = useCallback(async (e: React.FormEvent) => {
@@ -69,57 +209,216 @@ function App() {
       cellToUpdate.displayValue = formulaInput;
     }
     setCells(currentCells);
+    setIsEditingCell(false);
+    setIsFormulaMode(false);
+    
+    const formulaBar = document.querySelector('.formula-input') as HTMLInputElement;
+    if (formulaBar) formulaBar.blur();
   }, [formulaInput, selectedCell, cells]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.target instanceof HTMLInputElement && event.target.classList.contains('formula-input')) {
+        if (event.key === 'Escape') {
+          setFormulaInput(cells[selectedCell.row][selectedCell.col].formula);
+          setIsEditingCell(false);
+          setIsFormulaMode(false);
+          (event.target as HTMLInputElement).blur();
+        }
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key === 'c') {
+        handleCopy();
+        event.preventDefault();
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key === 'v') {
+        handlePaste();
+        event.preventDefault();
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key === 'x') {
+        handleCut();
+        event.preventDefault();
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        setFormulaInput(cells[selectedCell.row][selectedCell.col].formula);
+        setIsEditingCell(false);
+        setIsFormulaMode(false);
+        return;
+      }
+
+      if (event.key === 'F2') {
+        setIsEditingCell(true);
+        const formulaBar = document.querySelector('.formula-input') as HTMLInputElement;
+        if (formulaBar) formulaBar.focus();
+        event.preventDefault();
         return;
       }
 
       let newRow = selectedCell.row;
       let newCol = selectedCell.col;
+      let shouldMove = false;
 
       switch (event.key) {
         case 'ArrowUp':
-          newRow = Math.max(0, selectedCell.row - 1);
-          event.preventDefault();
+          if (!isEditingCell) {
+            newRow = Math.max(0, selectedCell.row - 1);
+            shouldMove = true;
+            event.preventDefault();
+            
+            if (event.shiftKey) {
+              if (!selectionStart) {
+                setSelectionStart(selectedCell);
+              }
+              setSelectionEnd({ row: newRow, col: selectedCell.col });
+            }
+          }
           break;
         case 'ArrowDown':
-          newRow = Math.min(GRID_HEIGHT - 1, selectedCell.row + 1);
-          event.preventDefault();
+          if (!isEditingCell) {
+            newRow = Math.min(GRID_HEIGHT - 1, selectedCell.row + 1);
+            shouldMove = true;
+            event.preventDefault();
+            
+            if (event.shiftKey) {
+              if (!selectionStart) {
+                setSelectionStart(selectedCell);
+              }
+              setSelectionEnd({ row: newRow, col: selectedCell.col });
+            }
+          }
           break;
         case 'ArrowLeft':
-          newCol = Math.max(0, selectedCell.col - 1);
-          event.preventDefault();
+          if (!isEditingCell) {
+            newCol = Math.max(0, selectedCell.col - 1);
+            shouldMove = true;
+            event.preventDefault();
+            
+            if (event.shiftKey) {
+              if (!selectionStart) {
+                setSelectionStart(selectedCell);
+              }
+              setSelectionEnd({ row: selectedCell.row, col: newCol });
+            }
+          }
           break;
         case 'ArrowRight':
-          newCol = Math.min(GRID_WIDTH - 1, selectedCell.col + 1);
-          event.preventDefault();
+          if (!isEditingCell) {
+            newCol = Math.min(GRID_WIDTH - 1, selectedCell.col + 1);
+            shouldMove = true;
+            event.preventDefault();
+            
+            if (event.shiftKey) {
+              if (!selectionStart) {
+                setSelectionStart(selectedCell);
+              }
+              setSelectionEnd({ row: selectedCell.row, col: newCol });
+            }
+          }
           break;
         case 'Enter':
-          handleFormulaSubmit(event as unknown as React.FormEvent);
-          event.preventDefault();
-          newRow = Math.min(GRID_HEIGHT - 1, selectedCell.row + 1);
+          if (isEditingCell) {
+            handleFormulaSubmit(event as unknown as React.FormEvent);
+            event.preventDefault();
+            newRow = Math.min(GRID_HEIGHT - 1, selectedCell.row + 1);
+            shouldMove = true;
+          } else {
+            setIsEditingCell(true);
+            const formulaBar = document.querySelector('.formula-input') as HTMLInputElement;
+            if (formulaBar) formulaBar.focus();
+            event.preventDefault();
+          }
           break;
         case 'Tab':
+          if (isEditingCell) {
+            handleFormulaSubmit(event as unknown as React.FormEvent);
+          }
           event.preventDefault();
           newCol = Math.min(GRID_WIDTH - 1, selectedCell.col + 1);
+          shouldMove = true;
+          break;
+        case 'Delete':
+        case 'Backspace':
+          if (!isEditingCell) {
+            setFormulaInput('');
+            const currentCells = cells.map(row => [...row]);
+            
+            if (selectionStart && selectionEnd) {
+              const minRow = Math.min(selectionStart.row, selectionEnd.row);
+              const maxRow = Math.max(selectionStart.row, selectionEnd.row);
+              const minCol = Math.min(selectionStart.col, selectionEnd.col);
+              const maxCol = Math.max(selectionStart.col, selectionEnd.col);
+              
+              for (let r = minRow; r <= maxRow; r++) {
+                for (let c = minCol; c <= maxCol; c++) {
+                  currentCells[r][c] = { formula: '', displayValue: '' };
+                }
+              }
+            } else {
+              currentCells[selectedCell.row][selectedCell.col] = { formula: '', displayValue: '' };
+            }
+            
+            setCells(currentCells);
+            event.preventDefault();
+          }
           break;
         default:
+          if (!isEditingCell && event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+            setIsEditingCell(true);
+            setFormulaInput(event.key);
+            setIsFormulaMode(event.key === '=');
+            const formulaBar = document.querySelector('.formula-input') as HTMLInputElement;
+            if (formulaBar) {
+              formulaBar.focus();
+              setTimeout(() => {
+                formulaBar.setSelectionRange(1, 1);
+              }, 0);
+            }
+            event.preventDefault();
+            return;
+          }
           return;
       }
-      setSelectedCell({ row: newRow, col: newCol });
-      setFormulaInput(cells[newRow][newCol].formula);
+
+      if (shouldMove) {
+        setSelectedCell({ row: newRow, col: newCol });
+        setFormulaInput(cells[newRow][newCol].formula);
+        setIsEditingCell(false);
+        setIsFormulaMode(false);
+        
+        if (!event.shiftKey) {
+          setSelectionStart(null);
+          setSelectionEnd(null);
+        }
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [selectedCell, cells, handleFormulaSubmit]);
+  }, [selectedCell, cells, handleFormulaSubmit, isEditingCell, handleCopy, handlePaste, handleCut]);
 
-  const cellReference = `${getColumnLabel(selectedCell.col)}${selectedCell.row + 1}`;
+  const cellReference = selectionStart && selectionEnd && (selectionStart.row !== selectionEnd.row || selectionStart.col !== selectionEnd.col)
+    ? `${getColumnLabel(Math.min(selectionStart.col, selectionEnd.col))}${Math.min(selectionStart.row, selectionEnd.row) + 1}:${getColumnLabel(Math.max(selectionStart.col, selectionEnd.col))}${Math.max(selectionStart.row, selectionEnd.row) + 1}`
+    : `${getColumnLabel(selectedCell.col)}${selectedCell.row + 1}`;
+
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      setIsDragging(false);
+    };
+    
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+    return () => {
+      window.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
+  }, []);
 
   return (
     <div className="h-screen flex flex-col bg-[#f8f9fa]">
@@ -171,10 +470,13 @@ function App() {
         </div>
       </div>
 
-      <form onSubmit={handleFormulaSubmit} className="bg-white border-b border-[#c0c0c0] px-3 py-2 flex items-center space-x-2">
+      <form onSubmit={handleFormulaSubmit} className={`bg-white border-b px-3 py-2 flex items-center space-x-2 ${isFormulaMode ? 'border-[#4a90e2] border-b-2' : 'border-[#c0c0c0]'}`}>
         <div className="px-3 py-1 bg-[#f5f5f5] border border-[#c0c0c0] rounded text-sm font-mono min-w-[80px] text-center">
           {cellReference}
         </div>
+        {isFormulaMode && (
+          <span className="text-xs px-2 py-0.5 bg-[#e3f2fd] text-[#1976d2] rounded font-medium">Formula Mode - Click cells to reference</span>
+        )}
         <input
           type="text"
           value={formulaInput}
@@ -194,7 +496,10 @@ function App() {
               <tr>
                 <th className="sticky top-0 left-0 z-20 w-12 h-6 bg-[#e8e8e8] border border-[#c0c0c0] text-xs font-semibold"></th>
                 {Array.from({ length: GRID_WIDTH }, (_, i) => (
-                  <th key={i} className="sticky top-0 z-10 min-w-[100px] h-6 bg-[#e8e8e8] border border-[#c0c0c0] text-xs font-semibold text-center">
+                  <th 
+                    key={i} 
+                    onClick={() => handleColumnClick(i)}
+                    className="sticky top-0 z-10 min-w-[100px] h-6 bg-[#e8e8e8] border border-[#c0c0c0] text-xs font-semibold text-center cursor-pointer hover:bg-[#d0d0d0]">
                     {getColumnLabel(i)}
                   </th>
                 ))}
@@ -203,20 +508,33 @@ function App() {
             <tbody>
               {cells.map((row, rowIndex) => (
                 <tr key={rowIndex}>
-                  <th className="sticky left-0 z-10 w-12 h-7 bg-[#e8e8e8] border border-[#c0c0c0] text-xs font-semibold text-center">
+                  <th 
+                    onClick={() => handleRowClick(rowIndex)}
+                    className="sticky left-0 z-10 w-12 h-7 bg-[#e8e8e8] border border-[#c0c0c0] text-xs font-semibold text-center cursor-pointer hover:bg-[#d0d0d0]">
                     {rowIndex + 1}
                   </th>
                   {row.map((cell, colIndex) => (
                     <td
                       key={`${rowIndex}-${colIndex}`}
                       onClick={() => handleCellClick(rowIndex, colIndex)}
-                      className={`min-w-[100px] h-7 border border-[#d0d0d0] px-2 text-sm cursor-cell ${
+                      onMouseDown={(e) => handleMouseDown(rowIndex, colIndex, e)}
+                      onMouseEnter={() => handleMouseEnter(rowIndex, colIndex)}
+                      onMouseUp={handleMouseUp}
+                      className={`min-w-[100px] h-7 border border-[#d0d0d0] px-2 text-sm select-none ${
+                        isFormulaMode ? 'cursor-crosshair' : 'cursor-cell'
+                      } ${
+                        isInSelection(rowIndex, colIndex)
+                          ? 'bg-[#cfe2ff]'
+                          : isFormulaMode ? 'hover:bg-[#e3f2fd]' : 'hover:bg-[#f8f9fa]'
+                      } ${
                         selectedCell.row === rowIndex && selectedCell.col === colIndex
-                          ? 'ring-2 ring-[#4a90e2] ring-inset bg-white'
-                          : 'hover:bg-[#f8f9fa]'
+                          ? 'ring-2 ring-[#4a90e2] ring-inset'
+                          : ''
                       }`}
                     >
-                      {cell.displayValue}
+                      {selectedCell.row === rowIndex && selectedCell.col === colIndex && isEditingCell
+                        ? formulaInput
+                        : cell.displayValue}
                     </td>
                   ))}
                 </tr>
